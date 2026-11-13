@@ -18,6 +18,7 @@ type ExperienceProfile = {
   level: "student / entry-level" | "early-career" | "mid-level" | "senior";
 };
 type ExperienceLevel = ExperienceProfile["level"];
+type WorkArrangement = "any" | "remote" | "hybrid" | "onsite";
 
 type SourceJob = {
   title?: string;
@@ -85,6 +86,38 @@ function getRoleTokens(role: string) {
   return role.toLowerCase().split(/[^a-z0-9+#.]+/).filter((token) => token.length > 2);
 }
 
+function getRequiredYears(value: string) {
+  const matches = [
+    ...value.matchAll(/(\d+(?:\.\d+)?)\s*(?:\+|or more)?\s*(?:years?|yrs?)\s+(?:of\s+)?(?:professional\s+)?experience/gi),
+    ...value.matchAll(/(?:at least|minimum of)\s+(\d+(?:\.\d+)?)\s*(?:years?|yrs?)/gi)
+  ];
+  const years = matches.map((match) => Number(match[1])).filter(Number.isFinite);
+  return years.length ? Math.max(...years) : null;
+}
+
+function getWorkMode(value: string): Exclude<WorkArrangement, "any"> {
+  const normalized = value.toLowerCase();
+  if (/\b(remote|work from home|wfh|anywhere|distributed)\b/.test(normalized)) return "remote";
+  if (/\bhybrid\b/.test(normalized)) return "hybrid";
+  return "onsite";
+}
+
+function countryMatches(value: string, country: string) {
+  if (!country) return true;
+  const normalized = value.toLowerCase();
+  const aliases: Record<string, string[]> = {
+    India: ["india", "indian"],
+    "United States": ["united states", "usa", "u.s.", "us"],
+    Canada: ["canada", "canadian"],
+    "United Kingdom": ["united kingdom", "uk", "england", "scotland", "wales"],
+    Germany: ["germany", "german"],
+    Australia: ["australia", "australian"],
+    Singapore: ["singapore"],
+    Worldwide: ["worldwide", "global", "anywhere"]
+  };
+  return (aliases[country] ?? [country.toLowerCase()]).some((alias) => normalized.includes(alias));
+}
+
 function isTooSenior(title: string, level: ExperienceLevel) {
   const penalty = getSeniorityPenalty(title, { years: null, level });
   return level !== "senior" && penalty >= (level === "mid-level" ? 30 : 20);
@@ -102,9 +135,9 @@ async function extractResume(formData: FormData) {
   return buffer.toString("utf8");
 }
 
-async function getJobs(role: string, location: string): Promise<SourceJob[]> {
+async function getJobs(role: string, country: string): Promise<SourceJob[]> {
   const queries = encodeURIComponent(role || "software engineer");
-  const locationQuery = encodeURIComponent(location || "");
+  const locationQuery = encodeURIComponent(country || "");
   const [remotiveResponse, arbeitnowResponse] = await Promise.all([
     fetch(`https://remotive.com/api/remote-jobs?search=${queries}`, { next: { revalidate: 900 } }),
     fetch(`https://www.arbeitnow.com/api/job-board-api?search=${queries}&location=${locationQuery}`, { next: { revalidate: 900 } })
@@ -118,7 +151,8 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const role = String(formData.get("role") ?? "").trim();
-    const location = String(formData.get("location") ?? "").trim();
+    const country = String(formData.get("country") ?? "").trim();
+    const workArrangement = String(formData.get("workArrangement") ?? "any") as WorkArrangement;
     const requestedLevel = String(formData.get("experienceLevel") ?? "").trim() as ExperienceLevel;
     const resume = await extractResume(formData);
     if (!role && !resume) return NextResponse.json({ error: "Add a target role or resume before searching." }, { status: 400 });
@@ -128,10 +162,20 @@ export async function POST(request: Request) {
     const validLevels: ExperienceLevel[] = ["student / entry-level", "early-career", "mid-level", "senior"];
     const experience = validLevels.includes(requestedLevel) ? { ...detectedExperience, level: requestedLevel } : detectedExperience;
     const roleTokens = getRoleTokens(role);
-    const jobs = await getJobs(role, location);
+    const jobs = await getJobs(role, country);
+    const requirementLimit = experience.level === "student / entry-level" ? 2 : experience.level === "early-career" ? 3 : experience.level === "mid-level" ? 6 : Infinity;
     const results: Job[] = jobs
       .filter((job) => job.title && job.url)
       .filter((job) => !isTooSenior(job.title ?? "", experience.level))
+      .filter((job) => {
+        const searchable = `${job.title} ${cleanHtml(job.description ?? "")} ${(job.tags ?? []).join(" ")}`;
+        const requiredYears = getRequiredYears(searchable);
+        const mode = getWorkMode(searchable);
+        const countryFit = countryMatches(searchable, country) || (mode === "remote" && countryMatches(searchable, "Worldwide"));
+        return (requiredYears === null || requiredYears <= requirementLimit)
+          && (workArrangement === "any" || mode === workArrangement)
+          && countryFit;
+      })
       .map((job) => {
         const title = job.title ?? "Untitled role";
         const description = cleanHtml(job.description ?? "");
@@ -140,8 +184,10 @@ export async function POST(request: Request) {
         const titleText = title.toLowerCase();
         const titleMatches = roleTokens.filter((token) => titleText.includes(token)).length;
         const roleMatch = role ? Math.min(25, titleMatches * 10) : 10;
-        const locationMatch = location ? (searchable.toLowerCase().includes(location.toLowerCase()) ? 10 : 0) : 10;
+        const locationMatch = country ? (countryMatches(searchable, country) || (getWorkMode(searchable) === "remote" && countryMatches(searchable, "Worldwide")) ? 10 : 0) : 10;
         const seniorityPenalty = getSeniorityPenalty(title, experience);
+        const requiredYears = getRequiredYears(searchable);
+        const mode = getWorkMode(searchable);
         const match = Math.min(98, Math.max(15, 45 + roleMatch + locationMatch + matchedSkills.length * 5 - seniorityPenalty));
         const seniorityNote = seniorityPenalty >= 20
           ? `This is above your detected ${experience.level} level, so it was ranked lower.`
@@ -150,11 +196,13 @@ export async function POST(request: Request) {
           title,
           company: job.company_name ?? job.company ?? "Company",
           location: job.candidate_required_location ?? job.location ?? "See listing",
-          mode: "Remote",
+          mode: mode === "onsite" ? "On-site" : mode[0].toUpperCase() + mode.slice(1),
           match,
           skills: matchedSkills.slice(0, 5),
           url: job.url!,
-          reason: seniorityNote || (matchedSkills.length
+          reason: seniorityNote || (requiredYears !== null
+            ? `This listing asks for approximately ${requiredYears}+ years of experience.`
+            : matchedSkills.length
             ? `Matches ${matchedSkills.slice(0, 3).join(", ")} from your resume.`
             : "Review the requirements closely; this role matched your target search.")
         };
