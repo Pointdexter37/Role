@@ -18,6 +18,7 @@ export default function Home() {
   const [fileName, setFileName] = useState("");
   const [role, setRole] = useState("");
   const [location, setLocation] = useState("");
+  const [experienceLevel, setExperienceLevel] = useState("");
   const [searched, setSearched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -47,6 +48,7 @@ export default function Home() {
     const data = new FormData();
     data.append("role", role);
     data.append("location", location);
+    data.append("experienceLevel", experienceLevel);
     data.append("resumeText", resumeText);
     const fileInput = document.querySelector<HTMLInputElement>('input[type="file"]');
     if (fileInput?.files?.[0]) data.append("resume", fileInput.files[0]);
@@ -105,6 +107,7 @@ export default function Home() {
             <label><span className="field-label">Target role</span><input value={role} onChange={(event) => setRole(event.target.value)} placeholder="e.g. Frontend Engineer" /></label>
             <label><span className="field-label">Location</span><input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="e.g. Remote or New York" /></label>
           </div>
+          <label><span className="field-label">Experience level</span><select value={experienceLevel} onChange={(event) => setExperienceLevel(event.target.value)}><option value="">Detect from resume</option><option value="student / entry-level">Student / Entry-level</option><option value="early-career">Early-career</option><option value="mid-level">Mid-level</option><option value="senior">Senior</option></select></label>
           <button type="submit" className="primary-button" disabled={loading}>{loading ? "Searching live listings..." : "Find matching roles"} <span>→</span></button>
           {error && <p className="form-error">{error}</p>}
         </form>

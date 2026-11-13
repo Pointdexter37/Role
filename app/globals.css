@@ -24,7 +24,7 @@ h2 { font-size: 21px; letter-spacing: -.035em; margin: 8px 0 0; }
 .upload-icon { width: 34px; height: 34px; display: grid; place-items: center; background: var(--mint); color: var(--green); border-radius: 6px; font-size: 21px; }
 .upload strong, .upload small { display: block; }.upload strong { font-size: 13px; }.upload small { color: var(--muted); font-size: 11px; margin-top: 3px; }.browse { margin-left: auto; color: var(--green); font-size: 12px; font-weight: 700; }
 .field-label { display: block; color: var(--muted); font-size: 11px; margin: 19px 0 8px; }
-textarea, input { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 12px; outline: none; color: var(--ink); font: 13px "DM Sans", sans-serif; background: #fff; }
+textarea, input, select { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 12px; outline: none; color: var(--ink); font: 13px "DM Sans", sans-serif; background: #fff; }
 textarea:focus, input:focus { border-color: var(--green); box-shadow: 0 0 0 3px #245c4812; }.field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .primary-button { border: 0; border-radius: 6px; margin-top: 23px; padding: 13px 17px; background: var(--green); color: white; font-weight: 700; cursor: pointer; }.primary-button span { margin-left: 22px; font-size: 18px; }
 .primary-button:disabled { opacity: .65; cursor: wait; }.form-error { color: #b4492d; font-size: 12px; margin: 12px 0 0; }

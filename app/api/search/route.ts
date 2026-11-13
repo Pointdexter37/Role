@@ -17,6 +17,7 @@ type ExperienceProfile = {
   years: number | null;
   level: "student / entry-level" | "early-career" | "mid-level" | "senior";
 };
+type ExperienceLevel = ExperienceProfile["level"];
 
 type SourceJob = {
   title?: string;
@@ -80,6 +81,15 @@ function getSeniorityPenalty(title: string, profile: ExperienceProfile) {
   return 0;
 }
 
+function getRoleTokens(role: string) {
+  return role.toLowerCase().split(/[^a-z0-9+#.]+/).filter((token) => token.length > 2);
+}
+
+function isTooSenior(title: string, level: ExperienceLevel) {
+  const penalty = getSeniorityPenalty(title, { years: null, level });
+  return level !== "senior" && penalty >= (level === "mid-level" ? 30 : 20);
+}
+
 async function extractResume(formData: FormData) {
   const text = String(formData.get("resumeText") ?? "").trim();
   const file = formData.get("resume");
@@ -109,20 +119,27 @@ export async function POST(request: Request) {
     const formData = await request.formData();
     const role = String(formData.get("role") ?? "").trim();
     const location = String(formData.get("location") ?? "").trim();
+    const requestedLevel = String(formData.get("experienceLevel") ?? "").trim() as ExperienceLevel;
     const resume = await extractResume(formData);
     if (!role && !resume) return NextResponse.json({ error: "Add a target role or resume before searching." }, { status: 400 });
 
     const resumeSkills = extractSkills(resume);
-    const experience = getExperienceProfile(resume);
+    const detectedExperience = getExperienceProfile(resume);
+    const validLevels: ExperienceLevel[] = ["student / entry-level", "early-career", "mid-level", "senior"];
+    const experience = validLevels.includes(requestedLevel) ? { ...detectedExperience, level: requestedLevel } : detectedExperience;
+    const roleTokens = getRoleTokens(role);
     const jobs = await getJobs(role, location);
     const results: Job[] = jobs
       .filter((job) => job.title && job.url)
+      .filter((job) => !isTooSenior(job.title ?? "", experience.level))
       .map((job) => {
         const title = job.title ?? "Untitled role";
         const description = cleanHtml(job.description ?? "");
         const searchable = `${title} ${description} ${(job.tags ?? []).join(" ")}`;
         const matchedSkills = resumeSkills.filter((skill) => new RegExp(`\\b${skill.replace(".", "\\.")}\\b`, "i").test(searchable));
-        const roleMatch = role ? (searchable.toLowerCase().includes(role.toLowerCase()) ? 25 : 0) : 10;
+        const titleText = title.toLowerCase();
+        const titleMatches = roleTokens.filter((token) => titleText.includes(token)).length;
+        const roleMatch = role ? Math.min(25, titleMatches * 10) : 10;
         const locationMatch = location ? (searchable.toLowerCase().includes(location.toLowerCase()) ? 10 : 0) : 10;
         const seniorityPenalty = getSeniorityPenalty(title, experience);
         const match = Math.min(98, Math.max(15, 45 + roleMatch + locationMatch + matchedSkills.length * 5 - seniorityPenalty));
