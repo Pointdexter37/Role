@@ -19,6 +19,8 @@ type SavedVersion = {
   text: string;
   createdAt: string;
 };
+type ApplicationStatus = "Saved" | "Applied" | "Interviewing" | "Rejected" | "Offer";
+type SavedJob = Job & { status: ApplicationStatus; notes: string; followUpDate: string; savedAt: string };
 
 export default function Home() {
   const [resumeText, setResumeText] = useState("");
@@ -37,11 +39,16 @@ export default function Home() {
   const [tailoredBullets, setTailoredBullets] = useState<string[]>([]);
   const [tailoring, setTailoring] = useState(false);
   const [savedVersions, setSavedVersions] = useState<SavedVersion[]>([]);
+  const [savedJobs, setSavedJobs] = useState<SavedJob[]>([]);
 
   useEffect(() => {
     const saved = window.localStorage.getItem("rolematch-resume-versions");
     if (saved) {
       try { setSavedVersions(JSON.parse(saved) as SavedVersion[]); } catch { window.localStorage.removeItem("rolematch-resume-versions"); }
+    }
+    const savedApplications = window.localStorage.getItem("rolematch-applications");
+    if (savedApplications) {
+      try { setSavedJobs(JSON.parse(savedApplications) as SavedJob[]); } catch { window.localStorage.removeItem("rolematch-applications"); }
     }
   }, []);
 
@@ -140,6 +147,25 @@ export default function Home() {
     URL.revokeObjectURL(link.href);
   }
 
+  function saveJob(job: Job) {
+    if (savedJobs.some((savedJob) => savedJob.url === job.url)) return;
+    const next = [{ ...job, status: "Saved" as ApplicationStatus, notes: "", followUpDate: "", savedAt: new Date().toISOString() }, ...savedJobs];
+    setSavedJobs(next);
+    window.localStorage.setItem("rolematch-applications", JSON.stringify(next));
+  }
+
+  function updateSavedJob(url: string, changes: Partial<SavedJob>) {
+    const next = savedJobs.map((job) => job.url === url ? { ...job, ...changes } : job);
+    setSavedJobs(next);
+    window.localStorage.setItem("rolematch-applications", JSON.stringify(next));
+  }
+
+  function removeSavedJob(url: string) {
+    const next = savedJobs.filter((job) => job.url !== url);
+    setSavedJobs(next);
+    window.localStorage.setItem("rolematch-applications", JSON.stringify(next));
+  }
+
   return (
     <main>
       <nav className="nav container">
@@ -195,7 +221,7 @@ export default function Home() {
             {visibleJobs.map((job) => <article className="job-card" key={job.title}>
               <div className="job-top"><div><h3>{job.title}</h3><p>{job.company} · {job.location}</p></div><span className="match">{job.match}% <small>match</small></span></div>
               <p className="reason">{job.reason}</p><div className="tags">{job.skills.map((skill) => <span key={skill}>{skill}</span>)}</div>
-              <div className="job-actions"><button type="button" className="secondary-button" onClick={() => void tailorForJob(job)}>Tailor resume</button><a href={job.url} target="_blank" rel="noreferrer">View listing ↗</a></div>
+              <div className="job-actions"><button type="button" className="secondary-button" onClick={() => void tailorForJob(job)}>Tailor resume</button><button type="button" className="secondary-button" onClick={() => saveJob(job)} disabled={savedJobs.some((savedJob) => savedJob.url === job.url)}>{savedJobs.some((savedJob) => savedJob.url === job.url) ? "Saved" : "Save job"}</button><a href={job.url} target="_blank" rel="noreferrer">View listing ↗</a></div>
             </article>)}
           </div>
           <div className="panel suggestions"><p className="eyebrow">RESUME SIGNALS</p><h2>Make your next application stronger</h2>
@@ -208,6 +234,13 @@ export default function Home() {
           {selectedJob && !tailoring && tailoredBullets.length > 0 && <div className="tailored-bullets">{tailoredBullets.map((bullet) => <p key={bullet}>• {bullet}</p>)}</div>}
           {savedVersions.length > 0 && <div className="saved-versions"><span>Saved versions:</span>{savedVersions.slice(0, 4).map((version) => <button type="button" key={version.id} onClick={() => setResumeText(version.text)}>{version.name}</button>)}</div>}
         </div>
+      </section>}
+      {savedJobs.length > 0 && <section className="tracker container">
+        <div className="results-heading"><div><p className="eyebrow">APPLICATION TRACKER</p><h2>Keep your search moving</h2></div><span className="result-count">{savedJobs.length} saved</span></div>
+        <div className="tracker-list">{savedJobs.map((job) => <article className="tracker-card" key={job.url}>
+          <div className="tracker-card-top"><div><h3>{job.title}</h3><p>{job.company} · {job.location}</p></div><button type="button" className="remove-button" onClick={() => removeSavedJob(job.url)}>Remove</button></div>
+          <div className="tracker-fields"><label><span>Status</span><select value={job.status} onChange={(event) => updateSavedJob(job.url, { status: event.target.value as ApplicationStatus })}><option>Saved</option><option>Applied</option><option>Interviewing</option><option>Rejected</option><option>Offer</option></select></label><label><span>Follow-up date</span><input type="date" value={job.followUpDate} onChange={(event) => updateSavedJob(job.url, { followUpDate: event.target.value })} /></label><label className="notes-field"><span>Notes</span><input value={job.notes} onChange={(event) => updateSavedJob(job.url, { notes: event.target.value })} placeholder="Add a note..." /></label></div>
+        </article>)}</div>
       </section>}
     </main>
   );
