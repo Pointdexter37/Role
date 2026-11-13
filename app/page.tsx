@@ -11,6 +11,9 @@ type Job = {
   skills: string[];
   url: string;
   reason: string;
+  postedAt: string | null;
+  source: string;
+  reliability: "High" | "Medium";
 };
 
 type SavedVersion = {
@@ -219,7 +222,7 @@ export default function Home() {
         <div className="result-grid">
           <div className="job-list">
             {visibleJobs.map((job) => <article className="job-card" key={job.title}>
-              <div className="job-top"><div><h3>{job.title}</h3><p>{job.company} · {job.location}</p></div><span className="match">{job.match}% <small>match</small></span></div>
+              <div className="job-top"><div><h3>{job.title}</h3><p>{job.company} · {job.location}</p><p className="job-meta">{job.source} · {job.reliability} reliability{job.postedAt ? ` · Updated ${new Date(job.postedAt).toLocaleDateString()}` : ""}</p></div><span className="match">{job.match}% <small>match</small></span></div>
               <p className="reason">{job.reason}</p><div className="tags">{job.skills.map((skill) => <span key={skill}>{skill}</span>)}</div>
               <div className="job-actions"><button type="button" className="secondary-button" onClick={() => void tailorForJob(job)}>Tailor resume</button><button type="button" className="secondary-button" onClick={() => saveJob(job)} disabled={savedJobs.some((savedJob) => savedJob.url === job.url)}>{savedJobs.some((savedJob) => savedJob.url === job.url) ? "Saved" : "Save job"}</button><a href={job.url} target="_blank" rel="noreferrer">View listing ↗</a></div>
             </article>)}

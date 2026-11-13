@@ -11,6 +11,9 @@ type Job = {
   skills: string[];
   url: string;
   reason: string;
+  postedAt: string | null;
+  source: string;
+  reliability: "High" | "Medium";
 };
 
 type ExperienceProfile = {
@@ -29,6 +32,11 @@ type SourceJob = {
   url?: string;
   description?: string;
   tags?: string[];
+  postedAt?: string | number;
+  publication_date?: string;
+  created_at?: string | number;
+  source?: string;
+  reliability?: "High" | "Medium";
 };
 
 const skillNames = [
@@ -138,13 +146,48 @@ async function extractResume(formData: FormData) {
 async function getJobs(role: string, country: string): Promise<SourceJob[]> {
   const queries = encodeURIComponent(role || "software engineer");
   const locationQuery = encodeURIComponent(country || "");
-  const [remotiveResponse, arbeitnowResponse] = await Promise.all([
-    fetch(`https://remotive.com/api/remote-jobs?search=${queries}`, { next: { revalidate: 900 } }),
-    fetch(`https://www.arbeitnow.com/api/job-board-api?search=${queries}&location=${locationQuery}`, { next: { revalidate: 900 } })
-  ]);
-  const remotive = remotiveResponse.ok ? await remotiveResponse.json() : { jobs: [] };
-  const arbeitnow = arbeitnowResponse.ok ? await arbeitnowResponse.json() : { data: [] };
-  return [...(remotive.jobs ?? []), ...(arbeitnow.data ?? [])];
+  const greenhouseCompanies = (process.env.GREENHOUSE_COMPANIES ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+  const leverCompanies = (process.env.LEVER_COMPANIES ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+  const requests = [
+    fetch(`https://remotive.com/api/remote-jobs?search=${queries}`, { next: { revalidate: 900 } }).then(async (response) => {
+      const data = response.ok ? await response.json() : { jobs: [] };
+      return (data.jobs ?? []).map((job: SourceJob) => ({ ...job, postedAt: job.publication_date ?? job.postedAt, source: "Remotive", reliability: "Medium" as const }));
+    }),
+    fetch(`https://www.arbeitnow.com/api/job-board-api?search=${queries}&location=${locationQuery}`, { next: { revalidate: 900 } }).then(async (response) => {
+      const data = response.ok ? await response.json() : { data: [] };
+      return (data.data ?? []).map((job: SourceJob) => ({ ...job, postedAt: job.created_at ?? job.postedAt, source: "Arbeitnow", reliability: "Medium" as const }));
+    }),
+    ...greenhouseCompanies.map((company) => fetch(`https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(company)}/jobs?content=true`, { next: { revalidate: 900 } }).then(async (response) => {
+      if (!response.ok) return [];
+      const data = await response.json();
+      return (data.jobs ?? []).map((job: { title: string; location?: { name?: string }; absolute_url?: string; content?: string; updated_at?: string }) => ({
+        title: job.title,
+        company,
+        location: job.location?.name,
+        url: job.absolute_url,
+        description: job.content,
+        postedAt: job.updated_at,
+        source: "Greenhouse",
+        reliability: "High" as const
+      }));
+    })),
+    ...leverCompanies.map((company) => fetch(`https://api.lever.co/v0/postings/${encodeURIComponent(company)}?mode=json`, { next: { revalidate: 900 } }).then(async (response) => {
+      if (!response.ok) return [];
+      const data = await response.json();
+      return (data ?? []).map((job: { text: string; categories?: { location?: string }; hostedUrl?: string; applyUrl?: string; descriptionPlain?: string; createdAt?: number }) => ({
+        title: job.text,
+        company,
+        location: job.categories?.location,
+        url: job.hostedUrl ?? job.applyUrl,
+        description: job.descriptionPlain,
+        postedAt: job.createdAt,
+        source: "Lever",
+        reliability: "High" as const
+      }));
+    }))
+  ];
+  const responses = await Promise.allSettled(requests);
+  return responses.flatMap((response) => response.status === "fulfilled" ? response.value : []);
 }
 
 export async function POST(request: Request) {
@@ -204,11 +247,18 @@ export async function POST(request: Request) {
             ? `This listing asks for approximately ${requiredYears}+ years of experience.`
             : matchedSkills.length
             ? `Matches ${matchedSkills.slice(0, 3).join(", ")} from your resume.`
-            : "Review the requirements closely; this role matched your target search.")
+            : "Review the requirements closely; this role matched your target search."),
+          postedAt: job.postedAt ? new Date(job.postedAt).toISOString() : null,
+          source: job.source ?? "Job board",
+          reliability: job.reliability ?? "Medium"
         };
       })
       .sort((a, b) => b.match - a.match)
-      .filter((job, index, all) => all.findIndex((candidate) => candidate.url === job.url) === index)
+      .filter((job, index, all) => all.findIndex((candidate) => {
+        const key = `${candidate.title.toLowerCase()}|${candidate.company.toLowerCase()}|${candidate.location.toLowerCase()}`;
+        const currentKey = `${job.title.toLowerCase()}|${job.company.toLowerCase()}|${job.location.toLowerCase()}`;
+        return candidate.url === job.url || key === currentKey;
+      }) === index)
       .slice(0, 12);
 
     const suggestions = [
