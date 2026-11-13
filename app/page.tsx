@@ -23,6 +23,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [visibleJobs, setVisibleJobs] = useState<Job[]>([]);
   const [suggestions, setSuggestions] = useState<string[][]>([]);
+  const [experience, setExperience] = useState<{ level: string; years: number | null } | null>(null);
 
   function handleFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -55,6 +56,7 @@ export default function Home() {
       if (!response.ok) throw new Error(result.error ?? "Search failed.");
       setVisibleJobs(result.jobs);
       setSuggestions(result.suggestions);
+      setExperience(result.experience ?? null);
       setSearched(true);
       const analysis = await fetch("/api/analyze", {
         method: "POST",
@@ -119,7 +121,7 @@ export default function Home() {
       </section>
 
       {searched && <section className="results container">
-        <div className="results-heading"><div><p className="eyebrow">YOUR SHORTLIST</p><h2>Roles worth your attention</h2></div><span className="result-count">{visibleJobs.length} matches</span></div>
+        <div className="results-heading"><div><p className="eyebrow">YOUR SHORTLIST</p><h2>Roles worth your attention</h2>{experience && <p className="experience-note">Ranking based on detected level: <strong>{experience.level}{experience.years !== null ? ` · approximately ${experience.years} years` : ""}</strong></p>}</div><span className="result-count">{visibleJobs.length} matches</span></div>
         <div className="result-grid">
           <div className="job-list">
             {visibleJobs.map((job) => <article className="job-card" key={job.title}>

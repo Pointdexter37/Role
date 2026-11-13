@@ -13,6 +13,11 @@ type Job = {
   reason: string;
 };
 
+type ExperienceProfile = {
+  years: number | null;
+  level: "student / entry-level" | "early-career" | "mid-level" | "senior";
+};
+
 type SourceJob = {
   title?: string;
   company_name?: string;
@@ -36,6 +41,43 @@ function cleanHtml(value: string) {
 
 function extractSkills(value: string) {
   return skillNames.filter((skill) => new RegExp(`\\b${skill.replace(".", "\\.")}\\b`, "i").test(value));
+}
+
+function getExperienceProfile(resume: string): ExperienceProfile {
+  const normalized = resume.toLowerCase();
+  const explicitYears = [...normalized.matchAll(/(\d+(?:\.\d+)?)\+?\s*(?:years?|yrs?)\s+(?:of\s+)?experience/g)]
+    .map((match) => Number(match[1]))
+    .filter(Number.isFinite);
+  const currentYear = new Date().getFullYear();
+  const dateYears = [...normalized.matchAll(/\b(19|20)\d{2}\b/g)]
+    .map((match) => Number(match[0]))
+    .filter((year) => year >= 1990 && year <= currentYear);
+  const estimatedYears = explicitYears.length
+    ? Math.max(...explicitYears)
+    : dateYears.length >= 2
+      ? Math.min(20, Math.max(0, currentYear - Math.min(...dateYears)))
+      : null;
+  const years = estimatedYears === null ? null : Math.round(estimatedYears * 10) / 10;
+  const hasStudentSignals = /\b(student|university|college|undergraduate|bachelor|intern|internship|fresher|graduate)\b/.test(normalized);
+  const level = years !== null
+    ? years < 2 ? "student / entry-level"
+      : years < 4 ? "early-career"
+        : years < 7 ? "mid-level"
+          : "senior"
+    : hasStudentSignals ? "student / entry-level" : "early-career";
+  return { years, level };
+}
+
+function getSeniorityPenalty(title: string, profile: ExperienceProfile) {
+  const normalized = title.toLowerCase();
+  const isStaff = /\b(staff|principal|lead|director|architect|head|manager)\b/.test(normalized);
+  const isSenior = /\b(senior|sr\.?|iii|iv)\b/.test(normalized);
+  if (isStaff) return profile.level === "senior" ? 5 : 35;
+  if (isSenior) return profile.level === "senior" ? 0 : profile.level === "mid-level" ? 8 : 25;
+  if (/\b(junior|jr\.?|entry|associate|intern)\b/.test(normalized)) {
+    return profile.level === "senior" ? 8 : -5;
+  }
+  return 0;
 }
 
 async function extractResume(formData: FormData) {
@@ -71,6 +113,7 @@ export async function POST(request: Request) {
     if (!role && !resume) return NextResponse.json({ error: "Add a target role or resume before searching." }, { status: 400 });
 
     const resumeSkills = extractSkills(resume);
+    const experience = getExperienceProfile(resume);
     const jobs = await getJobs(role, location);
     const results: Job[] = jobs
       .filter((job) => job.title && job.url)
@@ -81,7 +124,11 @@ export async function POST(request: Request) {
         const matchedSkills = resumeSkills.filter((skill) => new RegExp(`\\b${skill.replace(".", "\\.")}\\b`, "i").test(searchable));
         const roleMatch = role ? (searchable.toLowerCase().includes(role.toLowerCase()) ? 25 : 0) : 10;
         const locationMatch = location ? (searchable.toLowerCase().includes(location.toLowerCase()) ? 10 : 0) : 10;
-        const match = Math.min(98, Math.max(25, 45 + roleMatch + locationMatch + matchedSkills.length * 5));
+        const seniorityPenalty = getSeniorityPenalty(title, experience);
+        const match = Math.min(98, Math.max(15, 45 + roleMatch + locationMatch + matchedSkills.length * 5 - seniorityPenalty));
+        const seniorityNote = seniorityPenalty >= 20
+          ? `This is above your detected ${experience.level} level, so it was ranked lower.`
+          : "";
         return {
           title,
           company: job.company_name ?? job.company ?? "Company",
@@ -90,9 +137,9 @@ export async function POST(request: Request) {
           match,
           skills: matchedSkills.slice(0, 5),
           url: job.url!,
-          reason: matchedSkills.length
+          reason: seniorityNote || (matchedSkills.length
             ? `Matches ${matchedSkills.slice(0, 3).join(", ")} from your resume.`
-            : "Review the requirements closely; this role matched your target search."
+            : "Review the requirements closely; this role matched your target search.")
         };
       })
       .sort((a, b) => b.match - a.match)
@@ -105,7 +152,13 @@ export async function POST(request: Request) {
       ["Quantify impact", "Add numbers to two or three accomplishments, such as latency reduced, revenue influenced, or users supported."],
       ["Tailor your headline", `Make your target clear with a headline such as “${role || "Software Engineer"} · ${resumeSkills.slice(0, 2).join(" · ") || "Relevant skills"}”.`]
     ].slice(0, 4);
-    return NextResponse.json({ jobs: results, suggestions, resumeText: resume, sourceCount: jobs.length });
+    return NextResponse.json({
+      jobs: results,
+      suggestions,
+      resumeText: resume,
+      experience: { level: experience.level, years: experience.years },
+      sourceCount: jobs.length
+    });
   } catch (error) {
     console.error("Job search failed", error);
     return NextResponse.json({ error: "The job sources could not be reached. Try again shortly." }, { status: 502 });
