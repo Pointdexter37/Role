@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 
 type Job = {
   title: string;
@@ -11,6 +11,13 @@ type Job = {
   skills: string[];
   url: string;
   reason: string;
+};
+
+type SavedVersion = {
+  id: string;
+  name: string;
+  text: string;
+  createdAt: string;
 };
 
 export default function Home() {
@@ -25,6 +32,17 @@ export default function Home() {
   const [visibleJobs, setVisibleJobs] = useState<Job[]>([]);
   const [suggestions, setSuggestions] = useState<string[][]>([]);
   const [experience, setExperience] = useState<{ level: string; years: number | null } | null>(null);
+  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [tailoredBullets, setTailoredBullets] = useState<string[]>([]);
+  const [tailoring, setTailoring] = useState(false);
+  const [savedVersions, setSavedVersions] = useState<SavedVersion[]>([]);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("rolematch-resume-versions");
+    if (saved) {
+      try { setSavedVersions(JSON.parse(saved) as SavedVersion[]); } catch { window.localStorage.removeItem("rolematch-resume-versions"); }
+    }
+  }, []);
 
   function handleFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -59,6 +77,7 @@ export default function Home() {
       setVisibleJobs(result.jobs);
       setSuggestions(result.suggestions);
       setExperience(result.experience ?? null);
+      if (result.resumeText) setResumeText(result.resumeText);
       setSearched(true);
       const analysis = await fetch("/api/analyze", {
         method: "POST",
@@ -74,6 +93,49 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function tailorForJob(job: Job) {
+    setSelectedJob(job);
+    setTailoredBullets([]);
+    setTailoring(true);
+    setError("");
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ role, resume: resumeText, jobs: visibleJobs, selectedJob: job })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "Could not tailor this resume.");
+      setTailoredBullets(result.tailoredBullets ?? []);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not tailor this resume.");
+    } finally {
+      setTailoring(false);
+    }
+  }
+
+  function saveVersion() {
+    if (!resumeText.trim()) return;
+    const version: SavedVersion = {
+      id: crypto.randomUUID(),
+      name: selectedJob ? `${selectedJob.title} version` : "Resume version",
+      text: resumeText,
+      createdAt: new Date().toISOString()
+    };
+    const next = [version, ...savedVersions].slice(0, 10);
+    setSavedVersions(next);
+    window.localStorage.setItem("rolematch-resume-versions", JSON.stringify(next));
+  }
+
+  function downloadResume() {
+    const content = [resumeText, selectedJob && `\n\nTailored bullets for ${selectedJob.title} at ${selectedJob.company}:`, ...tailoredBullets.map((bullet) => `- ${bullet}`)].filter(Boolean).join("\n");
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([content], { type: "text/plain" }));
+    link.download = "rolematch-resume.txt";
+    link.click();
+    URL.revokeObjectURL(link.href);
   }
 
   return (
@@ -130,12 +192,18 @@ export default function Home() {
             {visibleJobs.map((job) => <article className="job-card" key={job.title}>
               <div className="job-top"><div><h3>{job.title}</h3><p>{job.company} · {job.location}</p></div><span className="match">{job.match}% <small>match</small></span></div>
               <p className="reason">{job.reason}</p><div className="tags">{job.skills.map((skill) => <span key={skill}>{skill}</span>)}</div>
-              <a href={job.url} target="_blank" rel="noreferrer">View listing ↗</a>
+              <div className="job-actions"><button type="button" className="secondary-button" onClick={() => void tailorForJob(job)}>Tailor resume</button><a href={job.url} target="_blank" rel="noreferrer">View listing ↗</a></div>
             </article>)}
           </div>
           <div className="panel suggestions"><p className="eyebrow">RESUME SIGNALS</p><h2>Make your next application stronger</h2>
             {suggestions.map(([title, body]) => <div className="suggestion" key={title}><span>✦</span><p><strong>{title}</strong><br />{body}</p></div>)}
           </div>
+        </div>
+        <div className="workspace-tools panel">
+          <div className="tools-heading"><div><p className="eyebrow">RESUME WORKSPACE</p><h2>{selectedJob ? `Tailor for ${selectedJob.title}` : "Save and tailor your resume"}</h2></div><div className="tool-buttons"><button type="button" className="secondary-button" onClick={saveVersion}>Save version</button><button type="button" className="primary-button compact-button" onClick={downloadResume}>Download .txt</button></div></div>
+          {tailoring && <p className="workspace-status">Generating job-specific bullets...</p>}
+          {selectedJob && !tailoring && tailoredBullets.length > 0 && <div className="tailored-bullets">{tailoredBullets.map((bullet) => <p key={bullet}>• {bullet}</p>)}</div>}
+          {savedVersions.length > 0 && <div className="saved-versions"><span>Saved versions:</span>{savedVersions.slice(0, 4).map((version) => <button type="button" key={version.id} onClick={() => setResumeText(version.text)}>{version.name}</button>)}</div>}
         </div>
       </section>}
     </main>
