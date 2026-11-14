@@ -39,6 +39,26 @@ type SourceJob = {
   reliability?: "High" | "Medium";
 };
 
+type RemoteOkJob = {
+  position?: string;
+  company?: string;
+  location?: string;
+  url?: string;
+  description?: string;
+  tags?: string[];
+  date?: string;
+};
+
+type HimalayasJob = {
+  title?: string;
+  companyName?: string;
+  location?: string;
+  applyUrl?: string;
+  description?: string;
+  skills?: string[];
+  pubDate?: string;
+};
+
 const skillNames = [
   "TypeScript", "JavaScript", "React", "Next.js", "Node.js", "Python",
   "Java", "C#", "Go", "PostgreSQL", "SQL", "MongoDB", "AWS", "Azure",
@@ -157,6 +177,44 @@ async function getJobs(role: string, country: string): Promise<SourceJob[]> {
       const data = response.ok ? await response.json() : { data: [] };
       return (data.data ?? []).map((job: SourceJob) => ({ ...job, postedAt: job.created_at ?? job.postedAt, source: "Arbeitnow", reliability: "Medium" as const }));
     }),
+    fetch(`https://remoteok.com/api?tag=${queries}`, {
+      headers: { "User-Agent": "RoleMatch job search" },
+      next: { revalidate: 900 }
+    }).then(async (response) => {
+      if (!response.ok) return [];
+      const data = await response.json() as RemoteOkJob[];
+      return data.filter((job) => job.position && job.url).map((job) => ({
+        title: job.position,
+        company: job.company,
+        location: job.location || "Remote",
+        url: job.url,
+        description: job.description,
+        tags: job.tags,
+        postedAt: job.date,
+        source: "Remote OK",
+        reliability: "Medium" as const
+      }));
+    }),
+    fetch(`https://himalayas.app/jobs/api?limit=50&query=${queries}`, { next: { revalidate: 900 } }).then(async (response) => {
+      if (!response.ok) return [];
+      const data = await response.json() as { jobs?: HimalayasJob[] };
+      return (data.jobs ?? []).map((job) => ({
+        title: job.title,
+        company: job.companyName,
+        location: job.location || "Remote",
+        url: job.applyUrl,
+        description: job.description,
+        tags: job.skills,
+        postedAt: job.pubDate,
+        source: "Himalayas",
+        reliability: "Medium" as const
+      }));
+    }),
+    fetch(`https://jobicy.com/api/v2/remote-jobs?count=50&tag=${queries}`, { next: { revalidate: 900 } }).then(async (response) => {
+      if (!response.ok) return [];
+      const data = await response.json() as { jobs?: SourceJob[] };
+      return (data.jobs ?? []).map((job) => ({ ...job, postedAt: job.postedAt ?? job.publication_date, source: "Jobicy", reliability: "Medium" as const }));
+    }),
     ...greenhouseCompanies.map((company) => fetch(`https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(company)}/jobs?content=true`, { next: { revalidate: 900 } }).then(async (response) => {
       if (!response.ok) return [];
       const data = await response.json();
@@ -214,7 +272,8 @@ export async function POST(request: Request) {
         const searchable = `${job.title} ${cleanHtml(job.description ?? "")} ${(job.tags ?? []).join(" ")}`;
         const requiredYears = getRequiredYears(searchable);
         const mode = getWorkMode(searchable);
-        const countryFit = countryMatches(searchable, country) || (mode === "remote" && countryMatches(searchable, "Worldwide"));
+        const countryFit = countryMatches(searchable, country)
+          || (mode === "remote" && (country === "India" || countryMatches(searchable, "Worldwide")));
         return (requiredYears === null || requiredYears <= requirementLimit)
           && (workArrangement === "any" || mode === workArrangement)
           && countryFit;
@@ -231,7 +290,8 @@ export async function POST(request: Request) {
         const seniorityPenalty = getSeniorityPenalty(title, experience);
         const requiredYears = getRequiredYears(searchable);
         const mode = getWorkMode(searchable);
-        const match = Math.min(98, Math.max(15, 45 + roleMatch + locationMatch + matchedSkills.length * 5 - seniorityPenalty));
+        const experienceFit = requiredYears === null ? 12 : Math.max(0, 15 - requiredYears * 4);
+        const match = Math.min(98, Math.max(15, 35 + roleMatch + locationMatch + experienceFit + matchedSkills.length * 6 - seniorityPenalty));
         const seniorityNote = seniorityPenalty >= 20
           ? `This is above your detected ${experience.level} level, so it was ranked lower.`
           : "";
@@ -272,7 +332,8 @@ export async function POST(request: Request) {
       suggestions,
       resumeText: resume,
       experience: { level: experience.level, years: experience.years },
-      sourceCount: jobs.length
+      sourceCount: jobs.length,
+      sources: [...new Set(results.map((job) => job.source))]
     });
   } catch (error) {
     console.error("Job search failed", error);
